@@ -38,8 +38,6 @@ The goal was to design, implement, and evaluate a **momentum-based trading strat
 ## 🚀 View the Report
 
 👉 [Click here to view the full HTML report](https://JawadKSM.github.io/momentum-strategy-rmarkdown/R_Project_Jawad_KASSIMI.html)  
-*(via GitHub Pages — enable in Settings → Pages → Branch: `main`, Folder: `/ (root)`)*  
-
 ---
 
 ## 🛠️ Requirements
