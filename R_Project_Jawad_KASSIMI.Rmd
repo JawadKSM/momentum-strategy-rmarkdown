@@ -1,0 +1,674 @@
+---
+title: "Momentum Strategy R-Project"
+subtitle: "Introduction to Data Science with R"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+date: "2025-04-07"
+author: "Jawad KASSIMI"
+---
+```{=html}
+<style type="text/css">
+h1.title {
+  font-size: 20 px;
+  color: DarkRed; /* Couleur personnalisée pour le titre */
+}
+h4.author {
+  font-size: 10 px;
+  color: Black; /* Couleur personnalisée pour l'auteur */
+}
+h1{color : darkblue}
+h2{color : black}
+h3{color : blue}
+h4{color : black}
+</style>
+```
+# General Introduction of the project 
+
+This project's objective is to backtest a trading strategy using historical stock market data. While the implementation is the result of personal work, it draws inspiration from online resources and artificial intelligence tools to guide the development of the strategy. The study will compare a benchmark portfolio with a more advanced strategy that seeks to improve performance based on stock-specific signals.
+
+I- Key Goals of my project :
+
+- Implement a benchmark strategy: A simple equally weighted portfolio will be my reference.
+- Develop an advanced trading strategy: Based on momentum and RSI filtering to optimize returns.
+- Analyze performance metrics: Compute financial indicators such as annual return, volatility, Sharpe   ratio, drawdown, and cumulative performance.
+- Visualize portfolio performance: Generate several plots to assess strategy effectiveness.
+
+II- The dataset I used consists of 88 stocks from the S&P 100 index retrieved from Yahoo Finance.
+
+## Installation and Loading of Required Packages
+Before implementing the strategies, I need to load the necessary R libraries.
+
+```{r message=FALSE, warning=FALSE}
+library(quantmod)
+library(PerformanceAnalytics)
+library(ggplot2)
+library(xts)
+library(tidyverse)
+library(dplyr)
+library(tidyquant)
+library(readxl)
+library(plotly)
+library(reshape2) 
+library(corrplot)
+library(knitr)
+library(kableExtra)
+```
+
+# Selection of the assets 
+I took only 88 stocks to avoid issues when importing some past datas like for 2005, 2006 etc because stocks like Tesla or Meta were not existing.
+
+## List of the tickers
+```{r}
+# List of the 88 tickers from the SP100 index
+symbols <- c("AAPL", "ABT", "ACN", "ADBE", "AIG", "AMD", "AMGN", "AMT", "AMZN", 
+             "AXP", "BA", "BAC", "BK", "BKNG", "BLK", "BMY", "BRK-B", "C", "CAT", "CL", 
+             "CMCSA", "COF", "COP", "COST", "CRM", "CSCO", "CVS", "CVX", "DE", "DHR", "DIS", 
+             "DUK", "EMR", "F", "FDX", "GD", "GE", "GILD", "GOOG", "GOOGL", "GS", "HD", "HON", 
+             "IBM", "INTC", "INTU", "JNJ", "JPM", "KO", "LIN", "LLY", "LMT", "LOW", 
+             "MCD", "MDLZ", "MDT", "MET", "MMM", "MO", "MRK", "MS", "MSFT", "NEE", "NFLX", 
+             "NKE", "NVDA", "ORCL", "PEP", "PFE", "PG", "QCOM", "RTX", "SBUX", "SCHW", 
+             "SO", "SPG", "T", "TGT", "TMO", "TXN", "UNH", "UNP", "UPS", "USB", 
+             "VZ", "WFC", "WMT", "XOM")
+
+```
+
+## Creation of the portfolio and importation of the datas
+The first step in my process is to retrieve historical stock prices from Yahoo Finance.
+Then, I structure this data into a time-series format for further analysis.
+
+I- Key Steps in this chunk:
+
+- Download historical stock prices from 2005 to 2025
+- Extract adjusted closing prices for each ticker
+- Merge all stock data into a structured time-series dataframe
+
+```{r}
+# Download stock data from Yahoo Finance
+for (sym in symbols) {
+  tryCatch({
+    getSymbols(sym, src = "yahoo", from = "2005-01-01", to = "2025-01-01")
+  }, error = function(e) {
+    cat("Error while downloading for:", sym, "\n")
+  })
+}
+
+# Extract adjusted closing prices for each stock
+price_list <- lapply(symbols, function(sym) {
+  if (exists(sym)) {
+    return(Cl(get(sym)))
+  } else {
+    return(NULL)
+  }
+})
+names(price_list) <- symbols #Assign stock tickers as column names
+
+# Remove null elements (stocks that were not downloaded)
+price_list <- price_list[!sapply(price_list, is.null)]
+
+# Merge prices into a single dataframe
+price_data <- do.call(merge, price_list)
+colnames(price_data) <- names(price_list)
+
+# Display the number of successfully imported stocks
+cat("Number of stocks imported:", ncol(price_data), "\n")
+
+# A Preview the first 5 columns of the dataset to check
+head(price_data[, 1:min(5, ncol(price_data))])
+```
+# Preliminary study of the portfolio
+Before implementing my trading strategy, I first analyze some key characteristics of the top 10 stocks from my 88 selected assets. This will provide some insights into the composition of my portfolio and the relative importance of the major stocks.
+
+## Market Capitalization of the top 10 
+Market capitalization represents the total market value of a company’s outstanding shares.
+It gives a good idea of which companies dominate the market and how they can influence the overall portfolio. Also, companies with a higher market caps are generally more stable but offer a lower potential growth, whereas the smaller market cap ones are more volatile and so they are riskier.
+
+The following code reads market capitalization data from an Excel file that I created, processes it, and visualizes the results.
+
+I- Key Steps of the chunk:
+
+- Read the Excel file containing market capitalization data.
+- Convert values to trillions of USD.
+- Visualize the companies in a horizontal bar chart.
+```{r}
+# Load the Excel file
+current_dir <- getwd() # Get the current working directory 
+file_path <- file.path(current_dir, "Market_Cap.xlsx") # Build the relative path to my Excel file
+market_data <- read_excel(file_path) # Read the file
+
+# Convert market cap to trillions (USD)
+market_data <- market_data %>%
+  mutate(marketcap = as.numeric(marketcap) / 1e12)  # Convert to trillions
+
+# Horizontal bar plot
+ggplot(market_data, aes(x = reorder(Name, marketcap), y = marketcap, fill = Name)) +
+  geom_bar(stat = "identity", show.legend = FALSE) +  
+  coord_flip() +  
+  labs(title = "Market Capitalization of Top 10 Companies",
+       x = "Company",
+       y = "Market Capitalization (Trillions USD)") +
+  theme_minimal() +
+  scale_fill_manual(values = c("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", 
+                               "#9467bd", "#8c564b", "#e377c2", "#7f7f7f", 
+                               "#bcbd22", "#17becf"))
+
+```
+
+This chart provides a clear visualization of the relative market capitalization of the largest stocks in my portfolio. It shows the dominance of Apple, which stands as the largest company with a market cap exceeding $3 trillion. NVIDIA and Microsoft follow closely, highlighting the continued strength of the technology sector. 
+
+From a portfolio perspective, the dominance of technology stocks suggests strong growth potential, but it also means an increased volatility, especially during market downturns. While there is some presence of financial, healthcare, and energy stocks that helps mitigate risk and ensures some level of diversification, my portfolio still remains heavily weighted toward tech-driven performance.
+
+## Weight distribution of the top 10 companies
+
+According to what we saw just before with the market cap I also wanted to analyze the weight distribution of the top 10.The goal is to understand the proportion of each stock in the portfolio and how their relative weight could impact the overall performance.
+
+I created a pie chart that represents each company's weight allocation in the portfolio.
+
+I- Key Steps :
+
+- Ensure proper formatting of weight data
+- Generate the pie chart: I added labels to display percentages on each segment.
+
+```{r}
+# Ensure 'weight' is correctly formatted as a numeric percentage
+market_data <- market_data %>%
+  mutate(weight = as.numeric(gsub("%", "", weight)))  
+
+# Create the pie chart
+ggplot(market_data, aes(x = "", y = weight, fill = Name)) +
+  geom_bar(stat = "identity", width = 1) + 
+  coord_polar(theta = "y") + 
+  geom_text(aes(label = paste0(round(weight * 100, 2), "%")), 
+            position = position_stack(vjust = 0.2), size = 2, color = "white", 
+            fontface="bold") +  # Add labels
+  scale_fill_brewer(palette = "Paired") +  
+  labs(title = "Weight Distribution of Top 10 Companies in the Portfolio") +
+  theme_void() +  # Remove background grid
+  theme(legend.title = element_blank(), 
+        plot.title = element_text(hjust = 0.2, face = "bold"))
+
+```
+
+We observe that Apple, NVIDIA, Microsoft, and Amazon hold the largest shares in the portfolio. Their  weight confirms their dominance not only in terms of market capitalization but also in their overall influence on portfolio performance. Some other companies like Alphabet, Berkshire Hathaway, Eli Lilly, JPMorgan Chase, Exxon Mobil, and UnitedHealth introduces some diversification into the portfolio which can help reduce the risks.
+
+## Correlation Heatmap 
+
+```{r}
+# Cumpute the daily returns
+returns <- na.omit(ROC(price_data, type = "discrete"))
+```
+
+Understanding the correlation structure within a portfolio is important to assess diversification and risk exposure.Highly correlated stocks tend to move in the same direction, increasing the portfolio's volatility, while low or negatively correlated assets can provide hedging opportunities.
+
+Here I plot a heatmap that provides an intuitive representation of how stock returns interact with each other.
+
+I- Key Steps :
+
+- I use cor() to compute pairwise Pearson correlations of stock returns.
+- Transform the matrix into a format suitable for visualization **melt() function**.
+- Create a heatmap:
+Red represents negative correlation, indicating opposing movements between stocks.
+Green represents positive correlation, showing similar price movement.
+White represents zero correlation between the two stocks.
+
+```{r}
+# Compute correlation matrix
+cor_matrix <- cor(returns, use = "pairwise.complete.obs")
+
+# Convert matrix to long format for ggplot
+melted_cor <- melt(cor_matrix)
+
+# Plot heatmap with improved readability
+ggplot(melted_cor, aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile(color = "white") +  
+  scale_fill_gradient2(low = "red", high = "green", mid = "white", 
+                       midpoint = 0, limit = c(-1,1), space = "Lab",
+                       name="Correlation") +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, size = 5),  
+    axis.text.y = element_text(size = 4),
+    legend.title = element_text(size = 10),
+    legend.text = element_text(size = 8)
+  ) +
+  labs(title = "Correlation Heatmap of the 88 Stocks",
+       x = "Stock", y = "Stock")
+
+```
+
+Here we observe that most stocks shows a highly positive correlations, suggesting that they follow similar market cycles. This highlights the strong influence of dominant sectors, particularly technology, on my portfolio performance. It is a sign that the portfolio contains high systematic risk.
+
+# Benchmark Strategy
+The benchmark strategy serves as a reference point for evaluating the performance of the advanced trading strategy.
+I chose an equally weighted portfolio where each stock receives the same weight, regardless of the market capitalization.
+
+## Equally Weighted Portfolio
+Key steps in the following code chunk:
+
+I- Compute equal weights: Each stock receives a weight of 1/N, where N is the total number of stocks.<br>
+II- Calculate portfolio returns: The overall return is computed as the weighted sum of individual stock returns.<br>
+III- Compute key performance indicators:
+
+- Annualized mean return: Measures the portfolio’s average yearly return.
+- Annualized volatility: Reflects the risk level, calculated as the standard deviation of daily returns.
+- Sharpe ratio: Evaluates risk-adjusted performance, showing how much return is gained per unit of risk.
+```{r}
+# Compute equal weights for each stock in the portfolio
+n <- ncol(returns)
+weights <- rep(1/n, n) 
+
+# Compute the portfolio returns
+portfolio_returns <- Return.portfolio(R = returns, weights = weights)
+
+# Compute key performance metrics
+mean_return <- mean(portfolio_returns) * 252  # Annualized mean return
+volatility <- sd(portfolio_returns) * sqrt(252)  # Annualized volatility
+sharpe_ratio <- mean_return / volatility  # Sharpe ratio
+
+# Create a dataframe to display the performance metrics
+results <- data.frame(
+  Metrics = c("Annualized Mean Return", "Annualized Volatility", "Sharpe Ratio"),
+ Value = c(round(mean_return * 100, 2), round(volatility * 100, 2), round(sharpe_ratio, 2))
+)
+names(results)[2] <- "Value (%)"
+
+kable(results, format = "html", caption = "Performance Metrics") %>%
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  column_spec(1, bold = TRUE)
+
+```
+
+
+# Results and charts
+Then I calculated some essential metrics for visualizing the performance of the benchmark strategy.<br>
+I- The cumulative returns showing the growth of an initial investment over time.<br>
+II- The daily returns to analyze volatility and short-term fluctuations.<br>
+III- The drawdowns to measure peak declines, highlighting periods of significant losses.
+```{r}
+# Computations of some metrics for the graphs 
+cumulative_returns <- cumprod(1 + portfolio_returns) - 1
+daily_returns <- portfolio_returns  
+drawdown <- Drawdowns(portfolio_returns)
+```
+
+## Charts 1/2 {.tabset}
+The first plot shows cumulative performance, illustrating portfolio growth over time. The line highlights trends, market crashes, or stagnation periods.
+
+The second plot is a bar chart of daily returns, where green bars indicate positive returns and red bars represent negative returns. This helps visualize market volatility and identify periods of high fluctuations.
+
+### Cumulative Portfolio Performance
+```{r}
+# Cumulative portfolio performance graph
+cumulative_returns_df <- data.frame(Date = index(cumulative_returns), 
+                                    Cumulative_Return = as.numeric(coredata(cumulative_returns)) * 100)
+
+ggplot(cumulative_returns_df, aes(x = Date, y = Cumulative_Return)) +
+  geom_line(color = "blue", linewidth = 0.7) +
+  labs(title = "Cumulative Portfolio Performance", 
+       x = "Date", y = "Cumulative return (%)") +
+  theme_minimal()
+```
+
+The strong upward trend indicates that the portfolio has consistently grown, reflecting the overall long-term appreciation of the stock market. However, some drawdowns can be observed, particularly around major market crises such as the COVID-19 crisis in 2020. 
+
+### Portfolio's Daily returns 
+```{r message=FALSE, warning=FALSE}
+# Daily returns bar chart
+daily_returns_df <- data.frame(Date = index(daily_returns), 
+                               DailyReturn = coredata(daily_returns))
+
+ggplot(daily_returns_df, aes(x = Date, y = daily_returns, fill = daily_returns > 0)) +
+  geom_bar(stat = "identity", show.legend = FALSE) +
+  scale_fill_manual(values = c("red", "green")) +
+  labs(title = "Portfolio's Daily Returns", 
+       x = "Date", y = "Daily Return (%)") +
+  theme_minimal()
+```
+
+We observe frequent fluctuations that indicate significant volatility, with occasional large spikes and drops corresponding to major market events. The presence of extreme downward movements highlights periods of high risk, reinforcing the importance of risk management. 
+
+## Charts 2/2 {.tabset}
+
+Then I created two others charts to show the drawdowns and a histogram of the daily returns. 
+
+The first graph plots the drawdown over time, which measures the peak decline of the portfolio at any given point. A drawdown occurs when the portfolio value drops from a previous high, and this metric is important to measure the severity and duration of losses.
+
+The histogram of daily returns shows the distribution of portfolio returns over time. The histogram provides insights into the volatility and skewness of returns. The red vertical dashed line represents the average return, showing whether the returns are normally distributed or exhibit extreme movements. A wider distribution indicates higher volatility, while a narrower concentration around the mean suggests stable performance.
+
+### Drawdown
+```{r message=FALSE, warning=FALSE}
+# Drawdown plot 
+drawdown_df <- data.frame(Date = index(drawdown), drawdown = coredata(drawdown))
+
+ggplot(drawdown_df, aes(x = Date, y = drawdown)) +
+  geom_line(color = "red", linewidth = 0.7) +
+  labs(title = "Portfolio Drawdown", 
+       x = "Date", y = "Drawdown (%)") +
+  theme_minimal()
+```
+
+Here, significant drops are visible, particularly during the 2008 financial crisis and the COVID-19 crash, where losses exceeded 40% at their worst points. These deep drawdowns emphasize the risks associated with equity investments and shows that even a diversified, equally weighted portfolio is not immune to major market crashes. We can also se some frequent smaller drawdowns which are normal. 
+
+### Histogram of daily returns
+```{r message=FALSE, warning=FALSE}
+# Histogram of daily returns
+ggplot(data.frame(Returns = coredata(na.omit(portfolio_returns))), aes(x = portfolio_returns)) +  
+  geom_histogram(bins = 50, fill = "darkgreen", color = "black", alpha = 0.8) +
+  geom_vline(xintercept = mean(portfolio_returns, na.rm = TRUE), 
+             color = "red", linetype = "dashed", linewidth = 1) +
+  labs(title = "Distribution of Daily Returns", 
+       x = "Daily Return", y = "Frequency") +
+  theme_minimal()
+
+```
+
+Thanks to this chart we can observe that the distribution is approximately normal, with most returns clustered around zero, meaning small daily changes are the most common. The red dashed line represents the mean daily return, which appears a bit positive. The fat tails on both sides indicate the occurrence of extreme market movements, showing that while the portfolio experiences small daily fluctuations most of the time, it is also subject to occasional large gains and losses, reinforcing the presence of market shocks and volatility spikes.
+
+## {.unnumbered}
+
+These four graphs provide a comprehensive view of the benchmark strategy’s risk-return dynamics, highlighting its steady long-term growth alongside periods of volatility and market stress. While the portfolio benefits from consistent appreciation, it still experiences significant drawdowns and daily fluctuations, highlighting the need for risk mitigation strategies. 
+
+# Conclusion for the benchmark 
+So to sum up, the indicators show an average return of `r round(mean_return * 100, 2)`% and a Sharpe ratio of `r round(sharpe_ratio, 2)` for the egalitarian portfolio based on the 88 selected from the SP100 stocks. The portfolio demonstrates a long-term growth, with measurable volatility and drawdowns, that provides me a reference point for comparing the advanced strategy.
+
+# Momentum Strategy using the RSI filter
+
+
+## Introduction
+
+This advanced strategy leverages momentum and an RSI filter to optimize stock selection and improve risk-adjusted returns. Unlike the equally weighted benchmark, which passively distributes capital across all stocks, my advanced strategy dynamically allocates investments by identifying high-momentum winners and low-momentum losers. 
+
+I will use the same 88 SP100 stocks to ensure a consistent comparison. Then, Momentum is measured over the past six months (considering 126 trading days), with the top 30% of stocks with the highest momentum chosen for long positions, while the bottom 30% are shorted. Also, to refine selection and avoid extreme price movements I chose to add to my strategy an RSI filter.A 14-day RSI filter is applied,long positions are only taken if RSI < 65, avoiding overbought conditions, while short positions require RSI > 35, preventing oversold entries. This additional filter helps reduce entry risk and potential reversals. The portfolio is structured as a market-neutral strategy, where long and short positions are weighted proportionally to the strength of their momentum signals.Then, like for the benchmark I will assess performance through annualized return, volatility, Sharpe ratio, and maximum drawdown, ensuring a comprehensive evaluation of profitability and risk exposure. 
+
+## Liste des tickers 
+
+I keep the same 88 stocks choosen from the SP100 as for the benchmark strategy.
+```{r include=FALSE}
+momentum_symbols <- c("AAPL", "ABT", "ACN", "ADBE", "AIG", "AMD", "AMGN", "AMT", "AMZN", 
+                      "AXP", "BA", "BAC", "BK", "BKNG", "BLK", "BMY", "BRK-B", "C", "CAT", "CL", 
+                      "CMCSA", "COF", "COP", "COST", "CRM", "CSCO", "CVS", "CVX", "DE", "DHR", "DIS", 
+                      "DUK", "EMR", "F", "FDX", "GD", "GE", "GILD", "GOOG", "GOOGL", "GS", "HD","HON",                       "IBM", "INTC", "INTU", "JNJ", "JPM", "KO", "LIN", "LLY", "LMT", "LOW", 
+                      "MCD", "MDLZ", "MDT", "MET", "MMM", "MO", "MRK", "MS", "MSFT", "NEE", "NFLX", 
+                      "NKE", "NVDA", "ORCL", "PEP", "PFE", "PG", "QCOM", "RTX", "SBUX", "SCHW", 
+                      "SO", "SPG", "T", "TGT", "TMO", "TXN", "UNH", "UNP", "UPS", "USB", 
+                      "VZ", "WFC", "WMT", "XOM")
+```
+
+## Get again the datas of the 88 stocks
+Here, I create another list variable for the stocks as for the list just before (**momentum_symbols**). I already have done this step in the benchmark strategy to collect data for each stock but I wanted to redo everything with different variable names (typically I added **momentum_** in front of each variable to differentiate them) to be sure to avoid any mistakes and confusion while using the variables for the following parts of my code. 
+```{r}
+for (sym in momentum_symbols) {
+  tryCatch({
+    getSymbols(sym, src = "yahoo", from = "2005-01-01", to = "2025-01-01")
+  }, error = function(e) {
+    cat("Error while downloading for:", sym, "\n")
+  }) 
+}
+
+# Extract adjusted closing prices
+momentum_price_list <- lapply(momentum_symbols, function(sym) {
+  if (exists(sym)) {
+    return(Cl(get(sym)))  
+  } else {
+    return(NULL)
+  }})
+momentum_price_list <- momentum_price_list[!sapply(momentum_price_list, is.null)]
+
+# Merge prices
+momentum_price_data <- do.call(merge, momentum_price_list)
+colnames(momentum_price_data) <- momentum_symbols[1:ncol(momentum_price_data)]
+
+head(momentum_price_data[, 1:min(5, ncol(momentum_price_data))])
+```
+
+# Momentum Calculation Over 6 Months
+
+This code chunk computes the 6-month momentum for each stock in the portfolio, which serves as the first signal for selecting assets for long and short positions.
+
+I- Momentum computation :<br>
+The **apply()** function iterates over each stock's price series in momentum_price_data. It calculates the percentage change over the last 126 trading days, using **x / lag(x, 126)**. If a stock has fewer than 126 data points, I chose to return NA to avoid incomplete calculations.<br>
+
+II- Extracting the latest momentum values:<br>
+Since I am only interested in the most recent momentum score, **tail(momentum_scores, 1)** extracts the latest available values for each stock.<br>
+
+III- Selecting long and short stocks:<br>
+Then, stocks are ranked based on their momentum scores.The top 30% of stocks with the highest momentum are selected for long positions. The bottom 30% of stocks with the lowest momentum are selected for short positions and they are finally displayed.
+
+```{r}
+# Compute 6-month returns (momentum)
+momentum_scores <- apply(momentum_price_data, 2, function(x) {
+  if (length(x) >= 126) {
+    return((x / lag(x, 126)) - 1)
+  } else {
+    return(rep(NA, length(x)))
+  }
+})
+
+momentum_scores <- tail(momentum_scores, 1)  # Latest momentum value for each stock
+momentum_scores <- na.omit(as.data.frame(t(momentum_scores)))
+
+# Select stocks for Long (Top 30%) and Short (Bottom 30%) positions
+momentum_long_stocks <- rownames(momentum_scores)[momentum_scores[, 1] >= quantile(momentum_scores[, 1], 0.7)]
+momentum_short_stocks <- rownames(momentum_scores)[momentum_scores[, 1] <= quantile(momentum_scores[, 1], 0.3)]
+
+cat("Stocks to Long:", momentum_long_stocks, "\n")
+cat("Stocks to Short:", momentum_short_stocks, "\n")
+```
+
+# Adding the RSI filter
+Then, after the first selection of stocks to long and short, this code enhances the momentum strategy by applying a Relative Strength Index (RSI) filter to refine stock selection. The RSI helps identify overbought and oversold conditions, preventing trades that could be at risk of a reversal.<br>
+
+I- Computing the RSI for each stock:<br>
+The 14-day RSI is calculated using the RSI() function from the **TTR package**.The results are converted into an xts object with proper date indexing for time series analysis.<br>
+
+II- Filtering stocks based on RSI:<br>
+For long positions, only stocks with RSI < 65 are selected, avoiding overbought stocks.For short positions, only stocks with RSI > 35 are considered, filtering out oversold stocks that could rebound.
+Then, the final list of filtered long and short positions is extracted from the previously selected momentum stocks.
+
+```{r}
+# Compute the RSI for each stock (I chose 14 days)
+momentum_rsi_data <- apply(momentum_price_data, 2, function(x) RSI(x, n = 14))
+momentum_rsi_data <- xts(momentum_rsi_data, order.by = index(momentum_price_data)) #Convert to time series
+momentum_rsi_data <- na.omit(momentum_rsi_data)  # Remove initial NA values from RSI calculation
+
+# Apply the RSI filter to refine stock selection
+momentum_valid_long <- momentum_long_stocks[momentum_rsi_data[nrow(momentum_rsi_data), momentum_long_stocks] < 65]
+momentum_valid_short <- momentum_short_stocks[momentum_rsi_data[nrow(momentum_rsi_data), momentum_short_stocks] > 35]
+
+cat("Long Stocks with RSI < 65 :", momentum_valid_long, "\n")
+cat("Short Stocks with RSI > 35 :", momentum_valid_short, "\n")
+```
+
+## Long-Short strategy based on Momentum
+
+The following code chunk computes the portfolio returns and performance metrics for the momentum strategy with the RSI filter, following a similar structure to the benchmark computation done just before. The filtered long and short stocks are assigned weights proportional to the strength of their momentum signals, while maintaining balanced exposure between long and short positions.The portfolio returns are then computed using **Return.portfolio()**, applying the selected weights. <br>
+Finally, key performance indicators are computed like for the benchmark : annualized mean return, volatility, Sharpe ratio, and maximum drawdown.
+
+```{r message=FALSE, warning=FALSE}
+# Compute daily returns for the selected stocks
+momentum_returns <- na.omit(ROC(momentum_price_data, type = "discrete"))
+
+# Compute new weights based on the strength of the momentum signal
+momentum_filtered_scores <- momentum_scores[c(momentum_valid_long, momentum_valid_short), , drop = FALSE]
+
+# Normalize weights for long positions
+long_scores <- momentum_filtered_scores[momentum_valid_long, 1]
+long_weights <- long_scores / sum(abs(long_scores))  # normalized by absolute value
+long_weights <- as.numeric(long_weights)
+
+# Normalize weights for short positions
+short_scores <- momentum_filtered_scores[momentum_valid_short, 1]
+short_weights <- -short_scores / sum(abs(short_scores))  # negative for shorts
+short_weights <- as.numeric(short_weights)
+
+# Combine long and short weights
+momentum_weights <- c(long_weights, short_weights)
+
+# Compute portfolio returns based on selected stocks and weights
+momentum_portfolio_returns <- Return.portfolio(R = momentum_returns[, c(momentum_valid_long, momentum_valid_short)],weights = momentum_weights)
+
+# Calculate key performance metrics
+momentum_mean_return <- mean(momentum_portfolio_returns) * 252
+momentum_volatility <- sd(momentum_portfolio_returns) * sqrt(252)
+momentum_sharpe_ratio <- momentum_mean_return / momentum_volatility
+momentum_max_drawdown <- maxDrawdown(momentum_portfolio_returns)
+
+# Create a dataframe for the results
+momentum_results <- data.frame(
+  Metrics = c("Annualized Return after RSI filter", "Annualized Volatility", "Sharpe Ratio", "Maximum Drawdown"),
+  Value = c(round(momentum_mean_return * 100, 2), 
+                  round(momentum_volatility * 100, 2), 
+                  round(momentum_sharpe_ratio, 2), 
+                  round(momentum_max_drawdown * 100, 2))
+)
+
+names(momentum_results)[2] <- "Value (%)"
+
+# Generate a table to display results 
+kable(momentum_results, format = "html", caption = "Momentum Strategy Performance Metrics") %>%
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  column_spec(1, bold = TRUE) 
+```
+---
+
+# Results and charts
+## Charts 1/2 {.tabset}
+
+Like for the benchmark, this code chunk calculates essential metrics for visualizing the performance of the strategy.
+```{r}
+# Compute key performance metrics for the Momentum strategy
+momentum_cumulative_returns <- cumprod(1 + momentum_portfolio_returns) - 1
+momentum_daily_returns <- momentum_portfolio_returns  
+momentum_drawdown <- Drawdowns(momentum_portfolio_returns)
+```
+
+Then, as I already did for the benchmark I plot here 4 graphs. The first plot shows cumulative performance,the second plot is a bar chart of daily returns, the third one plots the drawdown over time and the last one shows a histogram of daily returns.
+
+### Cumulative Portfolio Performance
+```{r}
+# Cumulative Performance Graph
+momentum_cumulative_returns_df <- data.frame(
+  Date = index(momentum_cumulative_returns), 
+  Cumulative_Return = as.numeric(coredata(momentum_cumulative_returns)) * 100)
+
+ggplot(momentum_cumulative_returns_df, aes(x = Date, y = Cumulative_Return)) +
+  geom_line(color = "blue", linewidth = 0.7) +
+  labs(title = "Momentum Strategy: Cumulative Performance", 
+       x = "Date", y = "Cumulative Return (%)") +
+  theme_minimal()
+```
+
+We see that the strategy demonstrates strong long term growth, with the portfolio experiencing significant appreciation over time. However, compared to the benchmark, it exhibits stronger growth and more pronounced swings, reflecting a higher exposure to strong-performing stocks. Large drawdowns are visible, particularly during financial crises such as 2008 and 2020, but the strategy recovers well, continuing its upward trajectory. 
+
+### Portfolio's Daily Returns
+```{r message=FALSE, warning=FALSE}
+# Daily Returns Bar Chart
+momentum_daily_returns_df <- data.frame(Date = index(momentum_daily_returns), 
+  DailyReturn = coredata(momentum_daily_returns))
+
+ggplot(momentum_daily_returns_df, aes(x = Date, y = momentum_daily_returns, fill = momentum_daily_returns > 0)) +
+  geom_bar(stat = "identity", show.legend = FALSE) +
+  scale_fill_manual(values = c("red", "green")) +
+  labs(title = "Momentum Strategy: Daily Returns", 
+       x = "Date", y = "Daily Return (%)") +
+  theme_minimal()
+```
+
+While the strategy maintains frequent positive returns, it also experiences sharp downward spikes, reflecting higher volatility compared to the benchmark. Although some negative spikes are still present, the severity of extreme losses appears reduced, suggesting that the new weighting scheme may help limit downside risk during adverse movements. Despite this, the strategy’s consistent ability to capture positive daily returns suggests a strong edge in trending markets, though it remains vulnerable to sudden corrections.
+
+## Charts 2/2 {.tabset}
+
+### Drawdown
+```{r message=FALSE, warning=FALSE}
+# 3 Drawdown Graph
+momentum_drawdown_df <- data.frame(Date = index(momentum_drawdown), Drawdown = coredata(momentum_drawdown))
+
+ggplot(momentum_drawdown_df, aes(x = Date, y = momentum_drawdown)) +
+  geom_line(color = "red", linewidth = 0.7) +
+  labs(title = "Momentum Strategy: Drawdown", 
+       x = "Date", y = "Drawdown (%)") +
+  theme_minimal()
+```
+
+As we saw in the first graph, significant drawdowns are visible, especially during major market crises, such as 2008 and 2020, where the portfolio suffered losses exceeding 70% at its worst point. This suggests that, while the strategy captures strong trends, it is also highly vulnerable to sharp market reversals, leading to deep and prolonged losses. Also some frequent smaller drawdowns in the graph indicate the strategy's exposure to volatility, meaning that even in stable conditions, the portfolio faces regular fluctuations.
+
+### Histogram of daily returns
+```{r message=FALSE, warning=FALSE}
+# 4 Histogram of Daily Returns
+ggplot(data.frame(Returns = coredata(na.omit(momentum_daily_returns))), aes(x = momentum_daily_returns)) +  
+  geom_histogram(bins = 50, fill = "darkgreen", color = "black", alpha = 0.8) +
+  geom_vline(xintercept = mean(momentum_daily_returns, na.rm = TRUE), 
+             color = "red", linetype = "dashed", linewidth = 1) +
+  labs(title = "Momentum Strategy: Return Distribution", 
+       x = "Daily Return", y = "Frequency") +
+  theme_minimal()
+```
+
+As for the benchmark, here most returns cluster around zero, with a relatively narrow spread, but there are notable extreme values on both ends, indicating the presence of large positive and negative outliers. The red dashed line, representing the average return, is slightly positive, suggesting a favorable risk-reward profile over time. However, the long tails on both sides confirm that the strategy experiences occasional large gains and losses, reinforcing its high-risk and high-reward nature.
+
+
+# Comparison of the Benchmark and the Trading Strategy
+Now I will compare the two strategies through plots. <br>
+
+The code below prepares the data for comparing the benchmark portfolio and the momentum strategy in terms of cumulative returns and drawdowns.A DataFrame is created to store cumulative performance of both the benchmark and momentum strategy over time and a second one is created to track drawdowns.
+```{r}
+# Create a DataFrame for cumulative returns comparison
+comparison_cumulative_returns_df <- data.frame(Date = index(momentum_cumulative_returns), 
+  Benchmark_CumReturn = as.numeric(coredata(cumulative_returns)) * 100,
+  Momentum_CumReturn = as.numeric(coredata(momentum_cumulative_returns)) * 100)
+
+# Create a DataFrame for drawdown comparison
+comparison_drawdown_df <- data.frame(Date = index(momentum_drawdown), 
+  Benchmark_Drawdown = as.numeric(coredata(drawdown)) * 100,
+  Momentum_Drawdown = as.numeric(coredata(momentum_drawdown)) * 100)
+```
+
+```{r}
+# Benchmark vs. Momentum Strategy cumulative performance
+ggplot(comparison_cumulative_returns_df, aes(x = Date)) +
+  geom_line(aes(y = Benchmark_CumReturn, color = "Benchmark"), linewidth = 0.6) + 
+  geom_line(aes(y = Momentum_CumReturn, color = "Momentum Strategy"), linewidth = 0.6) +
+  scale_color_manual(values = c("Benchmark" = "blue", "Momentum Strategy" = "red")) +
+  labs(title = "Cumulative Performance: Benchmark vs. Momentum Strategy",
+       x = "Date", y = "Cumulative Return (%)", color = "Portfolio") +
+  theme_minimal()
+```
+
+I- Cumulative Performance Comparison<br>
+
+The momentum strategy generally outperforms the benchmark, showing higher returns across most periods. However, its volatility is also more pronounced, with sharper increases and declines. The significant divergence in recent years highlights how momentum-based stock selection has benefited from strong trends, whereas the benchmark follows a steadier growth path. So, despite some corrections, the momentum strategy has significantly outperformed the benchmark, delivering even higher cumulative returns due to the enhanced weighting on stronger signals.
+
+```{r}
+# Crisis periods
+crisis_dates <- as.Date(c("2008-09-15", "2021-01-01"))
+
+# Benchmark vs. Momentum Strategy drawdown comparison 
+ggplot(comparison_drawdown_df, aes(x = Date)) +
+  geom_line(aes(y = Benchmark_Drawdown, color = "Benchmark"), linewidth = 0.5) + 
+  geom_line(aes(y = Momentum_Drawdown, color = "Momentum Strategy"), linewidth = 0.5) +
+  geom_vline(xintercept = as.numeric(crisis_dates[1]), linetype = "dashed", color = "black", linewidth = 1.2) +
+  geom_vline(xintercept = as.numeric(crisis_dates[2]), linetype = "dashed", color = "black", linewidth = 1.2) +
+  annotate("text", x = crisis_dates[1], y = min(comparison_drawdown_df$Benchmark, na.rm = TRUE), 
+           label = "2008 Crisis", angle = 90, vjust = -0.5, hjust = 1.2, size = 3, color = "black") +
+  annotate("text", x = crisis_dates[2], y = min(comparison_drawdown_df$Benchmark, na.rm = TRUE), 
+           label = "COVID-19", angle = 90, vjust = -0.5, hjust = 1.2, size = 3, color = "black") +
+  scale_color_manual(values = c("Benchmark" = "blue", "Momentum Strategy" = "red")) +
+  labs(title = "Drawdown Comparison: Benchmark vs. Momentum Strategy",
+       x = "Date", y = "Drawdown (%)", color = "Portfolio") +
+  theme_minimal()
+
+```
+
+II- Drawdown Comparison<br>
+
+This graph contrasts the drawdowns of both portfolios, with notable market crises such as 2008 and COVID-19 marked by black dashed lines. The momentum strategy exhibits deeper drawdowns, indicating that while it achieves higher returns, it is also more exposed to market downturns. During major crashes, the benchmark tends to recover more steadily, while the momentum portfolio experiences larger and prolonged losses before bouncing back. This suggests that momentum strategies can be highly profitable in upward-trending markets but carry greater downside risk during turbulent periods.
+
+# Conclusion
+
+I compared my advanced momentum strategy, based on the past six-month performance and refined with an RSI filter and signal-weighted allocation, to an equally weighted benchmark portfolio. The results indicate that the momentum strategy achieves an annualized return of `r round(momentum_mean_return * 100, 2)`%, compared to `r round(mean_return * 100, 2)`% for the benchmark. However, this higher return comes at the cost of increased risk, with an annualized volatility of `r round(momentum_volatility * 100, 2)`%, surpassing the benchmark's `r round(volatility * 100, 2)`%.
+
+While the Sharpe ratio of the benchmark (0.86) is slightly higher than that of the momentum strategy (0.73), the difference remains minimal, suggesting that both portfolios offer similar risk-adjusted returns. However, a major distinction arises in maximum drawdown, where the momentum strategy suffers a peak loss of -71.03%, compared to the benchmark’s relatively lower drawdowns. This highlights the momentum strategy’s sensitivity to market downturns, making it more vulnerable to sharp reversals and increased drawdown risk.
+
+From a performance perspective, the momentum approach has proven effective in capturing market trends and outperforming the benchmark over the long run. However, its higher volatility and deeper drawdowns suggest that risk management techniques could further improve the strategy, for instance incorporating stop-losses or dynamic position sizing to mitigate downside risks.
